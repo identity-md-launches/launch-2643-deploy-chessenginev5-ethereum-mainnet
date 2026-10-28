@@ -26,7 +26,8 @@ contract ChessEngineV5 is IChessEngine {
     int256 internal constant MATE = 100_000;
     uint256 internal constant MAX_MISTAKE = 400;
     uint256 internal constant REFINE = 4;
-    uint256 internal constant MATE_TESTS = 6; // checks tested for mate per choice, ours and (per look) the enemy's
+    uint256 internal constant MATE_TESTS = 6; // checks tested for mate per choice: ours, as many again of ours that box
+    // the king in, and (per look) the enemy's
     uint256 internal constant MAX_ACCURACY = 9_000; // even a whale keeps a tenth of the mistake
     int256 internal constant CHECK_BONUS = 30;
     int256 internal constant PRESSURE = 20;
@@ -69,6 +70,7 @@ contract ChessEngineV5 is IChessEngine {
         uint256 mateBps; // chance of testing a check for mate
         uint256 guardBps; // chance a second look asks whether the enemy then has a mate in one
         uint256 mateTests; // tests of our checks left
+        uint256 likelyTests; // ... and of our checks that leave the enemy king no square
         bool otherThreats; // notices threats to its other pieces
         uint8 ourKing;
         uint8 enemyKing;
@@ -217,6 +219,7 @@ contract ChessEngineV5 is IChessEngine {
         c.mateBps = 5_000 + acc / 2; // a check tested for mate: 50% .. 100%
         c.guardBps = acc < 7_000 ? 8_500 : 10_000; // only second looks use it, and a beginner takes none
         c.mateTests = MATE_TESTS;
+        c.likelyTests = MATE_TESTS;
     }
 
     /// Whether this turn's player notices threats to its other pieces: a chance of accuracy / 50%, certain from 50%.
@@ -330,12 +333,17 @@ contract ChessEngineV5 is IChessEngine {
             // spite check (the king just steps aside) earns nothing, so a queen doesn't chase the king around
             bool squeeze;
             if (check) {
-                if (c.mateTests != 0 && _mix(c.seedHash, m ^ 0x20000) % 10_000 < c.mateBps) {
-                    c.mateTests--;
+                uint64 room = _room(c, moved, from, to);
+                squeeze = victim != 0 || ep || room & (room - 1) == 0;
+                // a check that leaves the king no square (or opens a line, which _room doesn't count) is the likely
+                // mate: it has its own tests, so the ordinary ones aren't all spent on checks that come first
+                bool likely = (room == 0 || c.checks.disc & (uint64(1) << from) != 0) && c.likelyTests != 0;
+                if ((likely || c.mateTests != 0) && _mix(c.seedHash, m ^ 0x20000) % 10_000 < c.mateBps) {
+                    if (likely) c.likelyTests--;
+                    else c.mateTests--;
                     Bitboard.makeMoveInto(p, c.n, m, c.white);
                     if (!Bitboard.hasLegalMove(c.n, !c.white)) return (MATE, 0, 0, true, true);
                 }
-                squeeze = victim != 0 || ep || _boxes(c, moved, from, to);
                 if (squeeze) {
                     base += CHECK_BONUS;
                     activity = 120;
@@ -391,9 +399,9 @@ contract ChessEngineV5 is IChessEngine {
         }
     }
 
-    /// Whether the enemy king is left at most one safe square after our piece of type `t` goes from `from` to `to`
-    /// (our other attacks as before the move; a discovered line is not counted, so this errs towards "no").
-    function _boxes(Ctx memory c, uint8 t, uint8 from, uint8 to) internal pure returns (bool) {
+    /// The enemy king's safe squares after our piece of type `t` goes from `from` to `to` (our other attacks as before
+    /// the move; a discovered line is not counted, so this errs towards more room).
+    function _room(Ctx memory c, uint8 t, uint8 from, uint8 to) internal pure returns (uint64) {
         unchecked {
             uint64 king = uint64(1) << c.enemyKing; // lifted off the board: it can't step back along the line
             uint64 empty = (~(c.p.white | c.p.black) | (uint64(1) << from) | king) & ~(uint64(1) << to);
@@ -402,8 +410,7 @@ contract ChessEngineV5 is IChessEngine {
                 ? Bitboard.kingAttacks(b) : 0;
             if (t == 4 || t == 5) a = Bitboard.rookAttacks(b, empty);
             if (t == 2 || t == 5) a |= Bitboard.bishopAttacks(b, empty);
-            uint64 room = Bitboard.kingAttacks(king) & ~c.opp & ~(c.our1 | a);
-            return room & (room - 1) == 0;
+            return Bitboard.kingAttacks(king) & ~c.opp & ~(c.our1 | a);
         }
     }
 

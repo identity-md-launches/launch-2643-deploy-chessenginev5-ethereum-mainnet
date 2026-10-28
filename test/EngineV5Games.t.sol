@@ -88,7 +88,7 @@ contract EngineV5GamesTest is Chessboard {
     bytes32 fingerprint; // every move of every game: changes whenever play changes
 
     /// Update when play is meant to change (engine tuning); pure gas work must leave it as it is.
-    bytes32 constant GOLDEN = 0xd8cf2f8bfa2b6511983866ec5be1fddbed4111048ce36347cb13af8a5de4b14a;
+    bytes32 constant GOLDEN = 0x1b39ce9cce3b76f118a6d5af187bd26205513b69f9861aeba2a0cf2902caa50c;
     uint256 behindAt40;
 
     struct G {

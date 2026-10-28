@@ -74,4 +74,22 @@ contract EngineV5Test is Chessboard {
             }
         }
     }
+
+    /// Six other checks come before Rd8 mate in move order: checks that leave the king no square have their own mate
+    /// tests, so the ordinary six don't run out first (swarm audit, engine launch job).
+    function test_mateFoundAfterSixChecks() public {
+        uint256 b = put(put(put(put(put(put(put(put(0, "h3", 6), "a1", 4), "d7", 4), "e5", 3), "g5", 3), "d6", 3), "f4", 3),
+            "h4", 3);
+        b = put(put(put(put(b, "h8", 14), "b1", 13), "g7", 9), "h7", 9);
+        uint64[8] memory none;
+        (uint16 m,) = v5.play(b, side("h3"), side("h8"), false, 10_000, 0, none, 0, 0);
+        assertEq(m, mv("d7", "d8"), "Rd8 mates at full accuracy");
+        uint256 mates;
+        for (uint256 seed; seed < 16; seed++) {
+            (, Rules.Played memory p) = v5.play(b, side("h3"), side("h8"), false, 9_000, seed, none, 0, 0);
+            if (p.status == 2) mates++;
+        }
+        emit log_named_uint("mates at the hook's cap, of 16 seeds", mates);
+        assertGe(mates, 13, "almost always at the hook's cap");
+    }
 }
