@@ -6,5 +6,5 @@
       "constructorArgs": []
     }
   ],
-  "notes": "Ethereum mainnet engine-only launch of ChessEngineV5 as committed, with no constructor arguments. Its choose, play and playAny entry points are pure; there is no owner, admin or initialization step. The rule libraries are compiled into the engine and require no separate deployment. Solidity 0.8.26, Cancun, optimizer enabled with 200 runs and via_ir = true produce 22,268 runtime bytes. The complete engine/rules tests and corpora are retained. The hook is reserved for a separate later launch."
+  "notes": "Ethereum mainnet engine-only launch of ChessEngineV5 as committed, with no constructor arguments. Its choose, play and playAny entry points are pure; there is no owner, admin or initialization step. The rule libraries are compiled into the engine and require no separate deployment. Solidity 0.8.26, Cancun, optimizer enabled with 200 runs and via_ir = true produce 23,220 runtime bytes (23,246 initcode bytes, 1,356 under the EIP-170 limit) as rebuilt from this tree. The complete engine/rules tests and corpora are retained. The hook is reserved for a separate later launch."
 }
