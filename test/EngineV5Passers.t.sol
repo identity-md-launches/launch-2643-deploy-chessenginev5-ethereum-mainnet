@@ -16,9 +16,9 @@ contract ExactProbe is ChessEngineV5 {
     }
 }
 
-/// An enemy pawn a step from promotion is a risk every move is scored against (review finding 10cde183, engine
-/// launch): at every strength the engine takes it, blocks it or covers its promotion square, and when nothing can
-/// stop it, it still sells the cheapest piece for the new queen.
+/// An enemy pawn a step from promotion is a risk every move is scored against (review findings 10cde183 and
+/// be477030, engine launch): at every strength the engine takes it, blocks it or covers every square it can queen
+/// on, by a push or by a capture, and when nothing can stop it, it still sells the cheapest piece for the new queen.
 contract EngineV5PassersTest is Chessboard {
     ChessEngineV5 v5 = ChessEngineV5(vm.deployCode("ChessEngineV5.sol:ChessEngineV5"));
     ExactProbe probe = ExactProbe(vm.deployCode("EngineV5Passers.t.sol:ExactProbe"));
@@ -31,26 +31,34 @@ contract EngineV5PassersTest is Chessboard {
         uint32 w;
         uint32 k;
         bool white; // the engine's side
-        uint16 push; // the enemy's promotion
-        uint8 promo; // ... and its square
+        uint8 pawn; // the enemy pawn's square
     }
 
-    /// After the engine's move, the enemy's promotion is illegal, or the new queen can be taken at once.
+    /// After the engine's move, every promotion of the enemy pawn (a push or a capture) is illegal, or lands where
+    /// the new queen can be taken at once.
     function stopped(Case memory t, uint256 acc, uint256 seed) internal view returns (bool, uint16) {
         uint64[8] memory none;
         (uint32 mover, uint32 other) = t.white ? (t.w, t.k) : (t.k, t.w);
         (uint16 m, Rules.Played memory p) = v5.play(t.b, mover, other, !t.white, acc, seed, none, 1, 20);
         Bitboard.Pos memory after_ =
             Bitboard.fromBoard(p.board, t.white ? p.mover : p.other, t.white ? p.other : p.mover);
-        if (!Bitboard.isLegal(after_, t.push, !t.white)) return (true, m);
-        Rules.Played memory q = rules.move(p.board, p.other, p.mover, t.white, t.push);
-        if (q.status != 0) return (false, m);
-        Bitboard.Pos memory then = Bitboard.fromBoard(q.board, t.white ? q.other : q.mover, t.white ? q.mover : q.other);
-        uint16[] memory ours = Bitboard.legalMoves(then, t.white);
-        for (uint256 i; i < ours.length; i++) {
-            if (ours[i] & 63 == t.promo) return (true, m);
+        uint16[] memory replies = Bitboard.legalMoves(after_, !t.white);
+        for (uint256 i; i < replies.length; i++) {
+            uint16 r = replies[i];
+            uint8 to = uint8(r & 63);
+            if (r >> 6 != t.pawn || (to >> 3 != 0 && to >> 3 != 7)) continue;
+            Rules.Played memory q = rules.move(p.board, p.other, p.mover, t.white, r);
+            if (q.status != 0) return (false, m);
+            Bitboard.Pos memory then =
+                Bitboard.fromBoard(q.board, t.white ? q.other : q.mover, t.white ? q.mover : q.other);
+            uint16[] memory ours = Bitboard.legalMoves(then, t.white);
+            bool retake;
+            for (uint256 j; j < ours.length; j++) {
+                if (ours[j] & 63 == to) retake = true;
+            }
+            if (!retake) return (false, m);
         }
-        return (false, m);
+        return (true, m);
     }
 
     /// Every strength and seed stops the pawn.
@@ -75,12 +83,10 @@ contract EngineV5PassersTest is Chessboard {
     }
 
     /// ... as White, and as Black in the colour mirror of the position.
-    function stopsBothWays(string memory title, uint256 b, uint32 w, uint32 k, string memory pawn, string memory promo)
-        internal
-    {
-        stopsAll(Case(title, b, w, k, true, mv(pawn, promo), uint8(sq(promo))));
+    function stopsBothWays(string memory title, uint256 b, uint32 w, uint32 k, string memory pawn) internal {
+        stopsAll(Case(title, b, w, k, true, uint8(sq(pawn))));
         (uint256 mb, uint32 mw, uint32 mk) = mirror(b, w, k);
-        stopsAll(Case(title, mb, mw, mk, false, mv(flip(pawn), flip(promo)), uint8(sq(flip(promo)))));
+        stopsAll(Case(title, mb, mw, mk, false, uint8(sq(flip(pawn)))));
     }
 
     /// The same square seen from the other side of the board.
@@ -92,19 +98,63 @@ contract EngineV5PassersTest is Chessboard {
     /// K+R v K+P: White Kd3 Rb7, Black Kg8 pawn h2. Rb1 or Rh7 wins (h1=Q Rxh1); a king move loses the rook.
     function test_rookEndingPawnOnSeventh() public {
         uint256 b = put(put(put(put(0, "d3", 6), "b7", 4), "g8", 14), "h2", 9);
-        stopsBothWays("KR v KP", b, side("d3"), side("g8"), "h2", "h1");
+        stopsBothWays("KR v KP", b, side("d3"), side("g8"), "h2");
     }
 
     /// K+R v K+P: White Kd3 Ra1, Black Kg8 pawn h2. Rh1 blocks the pawn.
     function test_rookCanBlockOnFirstRank() public {
         uint256 b = put(put(put(put(0, "d3", 6), "a1", 4), "g8", 14), "h2", 9);
-        stopsBothWays("KR v KP, Ra1", b, side("d3"), side("g8"), "h2", "h1");
+        stopsBothWays("KR v KP, Ra1", b, side("d3"), side("g8"), "h2");
     }
 
     /// K+R+B v K+P: White Ke2 Rd8 Bc5, Black Ke6 pawn h2. Rh8 or Rd1 wins.
     function test_rookAndBishopEnding() public {
         uint256 b = put(put(put(put(put(0, "e2", 6), "d8", 4), "c5", 2), "e6", 14), "h2", 9);
-        stopsBothWays("KRB v KP", b, side("e2"), side("e6"), "h2", "h1");
+        stopsBothWays("KRB v KP", b, side("e2"), side("e6"), "h2");
+    }
+
+    /// A pawn whose push is blocked still queens by capture (review finding be477030): White Kg1 Bb1 Nc1 Ng4,
+    /// Black Ka8 Rh6 pawn b2. Ng4xh6 wins a rook but lets b2xc1=Q+ through, where nothing takes the queen: B+N v Q
+    /// instead of B+N+N v R+P. A knight move off c1 (Nd3, Ne2, Nb3, Na2) leaves the pawn no promotion at all.
+    function test_blockedPawnQueensByCapture() public {
+        uint256 b =
+            put(put(put(put(put(put(put(0, "g1", 6), "b1", 2), "c1", 3), "g4", 3), "a8", 14), "h6", 12), "b2", 9);
+        stopsBothWays("B+N+N v R+P, push blocked", b, side("g1"), side("a8"), "b2");
+    }
+
+    /// The push square alone is not the threat: White Kg1 Rb8 Nc1 Ng4, Black Ka7 Rh6 pawn b2. b1 is empty and
+    /// covered by the rook, so b1=Q loses the queen, but b2xc1=Q+ still queens uncovered after Ng4xh6.
+    function test_coveredPushSquareStillQueensByCapture() public {
+        uint256 b =
+            put(put(put(put(put(put(put(0, "g1", 6), "b8", 4), "c1", 3), "g4", 3), "a7", 14), "h6", 12), "b2", 9);
+        stopsBothWays("R+N+N v R+P, push covered", b, side("g1"), side("a7"), "b2");
+    }
+
+    /// A pawn with no promotion move now is still a threat after the move: White Ka2 Bb1 Nd3, Black Kh8 Rc1 pawn
+    /// b2. Nd3xc1 wins the rook with the knight, and b2xc1=Q takes it back and queens where nothing of ours can
+    /// follow (the bishop keeps b1 blocked, the king is a square too far); Kxb2 simply wins the pawn.
+    function test_pawnWithoutAMoveStillCounts() public {
+        uint256 b = put(put(put(put(put(put(0, "a2", 6), "b1", 2), "d3", 3), "h8", 14), "c1", 12), "b2", 9);
+        stopsBothWays("B+N v R+P, blocked pawn", b, side("a2"), side("h8"), "b2");
+    }
+
+    /// A capture square counts for exactly what it holds: White Kg2 Rb8 Bc1 Rh1, Black Ka6 Rh6 pawn b2. The second
+    /// look (base 0, so the score is minus the threat) charges each move the worse of the pawn's squares, b1 (empty,
+    /// covered by Rb8 along the file with the pawn lifted) and c1 (the bishop, covered by Rh1 along the rank).
+    function test_captureSquareScoredAtItsPiece() public view {
+        uint256 b =
+            put(put(put(put(put(put(put(0, "g2", 6), "b8", 4), "c1", 2), "h1", 4), "a6", 14), "h6", 12), "b2", 9);
+        uint32 w = side("g2");
+        uint32 k = side("a6");
+        // Rh1xh6+: nothing covers c1 any more, so b2xc1=Q wins the bishop and queens for good: 320 + 800
+        assertEq(probe.exact(b, w, k, true, mv("h1", "h6")), -(320 + 800), "Rxh6: the bishop and a queen");
+        // Rb8-a8+: the rook leaves the b-file, and Rh1 cannot see past the bishop: b1=Q is free (800); c1 costs less
+        assertEq(probe.exact(b, w, k, true, mv("b8", "a8")), -800, "Ra8+: the push square is uncovered");
+        // Rh1-f1: b1 stays covered and undefended (nothing); on c1 the pawn takes the bishop and Rf1 takes the queen,
+        // which is the bishop less the pawn (and the same as the plain threat to the bishop): 320 - 100
+        assertEq(probe.exact(b, w, k, true, mv("h1", "f1")), -(320 - 100), "Rf1: the bishop for the pawn");
+        // Bc1-e3: the pawn's only square is b1, covered by two rooks and undefended: nothing at stake
+        assertEq(probe.exact(b, w, k, true, mv("c1", "e3")), 0, "Be3: nothing at stake");
     }
 
     /// The pawn's own king defends the promotion square (Black Kg2 pawn h2), so nothing stops it: the engine still

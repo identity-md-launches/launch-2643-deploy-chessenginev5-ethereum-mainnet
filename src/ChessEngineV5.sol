@@ -22,8 +22,9 @@ import {Rules} from "./Rules.sol";
 /// its own king closer. The longer a quiet stretch lasts (no capture or pawn move), the more it leans towards
 /// progress: pawn moves, checks, pressure on the enemy king and trades that lose no material, trades mainly when
 /// ahead. Risk is still scored, so it never hangs a piece to break the stretch. An enemy pawn a step from queening
-/// is a risk every move is scored against, at every strength: a move that neither takes it, blocks it nor covers
-/// its promotion square loses a queen for a pawn.
+/// is a risk every move is scored against, at every strength, on every square it can queen on after the move: straight
+/// ahead when that square is empty, or diagonally onto a piece of ours. A move that neither takes the pawn nor leaves
+/// each of those squares blocked or covered loses a queen for a pawn, and the piece it queens on.
 ///
 /// The engine is pure: every chance above (which quiet moves it weighs, which checks it tests, its second looks and
 /// its mistake) is a function of `seed` alone, so the same seed always gives the same move. The caller must draw
@@ -97,7 +98,7 @@ contract ChessEngineV5 is IChessEngine {
         uint32 gameNo;
         uint256 push; // the push for progress, 0-10,000, from the quiet half-moves
         uint64[8] previous;
-        uint64 passers; // enemy pawns a step from promotion with the square ahead empty
+        uint64 passers; // enemy pawns on their seventh rank: a step from promotion by a push or a capture
     }
 
     function play(
@@ -295,9 +296,9 @@ contract ChessEngineV5 is IChessEngine {
             c.checks = Bitboard.checkInfo(p, white);
             if (c.conversion) return c;
             c.enemy = _maps(p, !white);
-            // enemy pawns a step from promotion with the square ahead empty: every move is scored against that threat
-            uint64 seventh = p.pc[1] & c.opp & (white ? RANK_2 : RANK_7);
-            c.passers = white ? seventh & (empty << 8) : seventh & (empty >> 8);
+            // enemy pawns on their seventh rank: every move is scored against where they can queen after it (a push
+            // onto an empty square, or a capture of a piece of ours), so a blocker never wanders off either
+            c.passers = p.pc[1] & c.opp & (white ? RANK_2 : RANK_7);
             // squares we attack, and those attacked from two groups (each pawn diagonal, knights, bishops, rooks,
             // queens, king): two pieces of one group on the same square count once, so a defence is never overrated
             uint64 pawns = p.pc[1] & c.own;
@@ -447,11 +448,13 @@ contract ChessEngineV5 is IChessEngine {
         }
     }
 
-    /// What the enemy's pawns a step from promotion (c.passers) win on `p`, the position after our move: a queen
-    /// for a pawn (PROMOTION) unless the move took the pawn, blocked it, or left us attacking the promotion square,
-    /// where the new queen goes for nothing when the square is undefended, else for our cheapest attacker (a king
-    /// takes nothing defended). Lines are read with the pawn gone from its square, so a rook behind it counts for
-    /// either side.
+    /// What the enemy's pawns on their seventh rank (c.passers) win on `p`, the position after our move, on the worst
+    /// of the squares each can queen on: the square ahead when it is empty, and the squares diagonally ahead holding
+    /// a piece of ours (not the king). Each costs a queen for a pawn (PROMOTION), plus the piece taken, unless we
+    /// attack it: then the new queen goes for the pawn when the square is undefended (so a capture costs the piece
+    /// less a pawn), else for our cheapest attacker (a king takes nothing defended). A pawn the move took, or left
+    /// without a square, costs nothing. Lines are read with the pawn gone from its square, so a rook behind it
+    /// counts for either side.
     function _promotion(Ctx memory c, Bitboard.Pos memory p) internal pure returns (int256 loss) {
         unchecked {
             uint64 own = c.white ? p.white : p.black;
@@ -460,27 +463,52 @@ contract ChessEngineV5 is IChessEngine {
             while (pawns != 0) {
                 uint64 pb = uint64(1) << Bitboard.lsb(pawns);
                 pawns &= pawns - 1;
-                uint64 qb = c.white ? pb >> 8 : pb << 8;
-                if ((own | opp) & qb != 0) continue; // blocked
-                // the squares from which each kind of piece attacks the promotion square
-                uint64 straight = Bitboard.rookAttacks(qb, ~(own | opp) | pb);
-                uint64 diagonal = Bitboard.bishopAttacks(qb, ~(own | opp) | pb);
-                uint64 jumps = Bitboard.knightAttacks(qb);
-                uint64 steps = Bitboard.kingAttacks(qb);
-                bool defended = Bitboard.pawnAttacks(p.pc[1] & opp, !c.white) & qb != 0
-                    || ((jumps & p.pc[3])
-                                | (diagonal & (p.pc[2] | p.pc[5]))
-                                | (straight & (p.pc[4] | p.pc[5]))
-                                | (steps & p.pc[6])) & opp != 0;
-                int256 a; // our cheapest attacker: 300, 500, 900, or 1 for the king alone
-                if (((jumps & p.pc[3]) | (diagonal & p.pc[2])) & own != 0) a = 300;
-                else if (straight & p.pc[4] & own != 0) a = 500;
-                else if ((straight | diagonal) & p.pc[5] & own != 0) a = 900;
-                else if (steps & p.pc[6] & own != 0) a = 1;
-                int256 l = a == 0 || (defended && a == 1) ? PROMOTION : !defended ? int256(0) : a - 100;
-                if (l > loss) loss = l;
+                uint64 empty = ~(own | opp) | pb; // with the pawn lifted off its square
+                uint64 squares =
+                    ((c.white ? pb >> 8 : pb << 8) & empty) | (Bitboard.pawnAttacks(pb, !c.white) & own & ~p.pc[6]);
+                while (squares != 0) {
+                    uint64 qb = uint64(1) << Bitboard.lsb(squares);
+                    squares &= squares - 1;
+                    int256 l = _queening(c, p, own, opp, empty, pb, qb) + _value(_typeOn(p, qb));
+                    if (l > loss) loss = l;
+                }
             }
         }
+    }
+
+    /// What the enemy pawn on `pb` wins by queening on `qb` (beyond the piece it takes there, if any), on `p` with
+    /// `empty` the squares its lines pass through: see _promotion.
+    function _queening(Ctx memory c, Bitboard.Pos memory p, uint64 own, uint64 opp, uint64 empty, uint64 pb, uint64 qb)
+        internal
+        pure
+        returns (int256)
+    {
+        unchecked {
+            // the squares from which each kind of piece attacks the promotion square
+            uint64 straight = Bitboard.rookAttacks(qb, empty);
+            uint64 diagonal = Bitboard.bishopAttacks(qb, empty);
+            uint64 jumps = Bitboard.knightAttacks(qb);
+            uint64 steps = Bitboard.kingAttacks(qb);
+            bool defended = Bitboard.pawnAttacks(p.pc[1] & opp & ~pb, !c.white) & qb != 0
+                || ((jumps & p.pc[3])
+                            | (diagonal & (p.pc[2] | p.pc[5]))
+                            | (straight & (p.pc[4] | p.pc[5]))
+                            | (steps & p.pc[6])) & opp != 0;
+            int256 a; // our cheapest attacker: 300, 500, 900, or 1 for the king alone
+            if (((jumps & p.pc[3]) | (diagonal & p.pc[2])) & own != 0) a = 300;
+            else if (straight & p.pc[4] & own != 0) a = 500;
+            else if ((straight | diagonal) & p.pc[5] & own != 0) a = 900;
+            else if (steps & p.pc[6] & own != 0) a = 1;
+            return a == 0 || (defended && a == 1) ? PROMOTION : !defended ? int256(-100) : a - 100;
+        }
+    }
+
+    /// The type of the piece on `bit` (a single square) in `p`, 0 for none.
+    function _typeOn(Bitboard.Pos memory p, uint64 bit) internal pure returns (uint8 t) {
+        for (t = 1; t <= 6; t++) {
+            if (p.pc[t] & bit != 0) return t;
+        }
+        return 0;
     }
 
     /// The enemy king's safe squares after our piece of type `t` goes from `from` to `to` (our other attacks as before
