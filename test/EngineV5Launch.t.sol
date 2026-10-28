@@ -21,7 +21,7 @@ contract LaunchProbe {
 }
 
 /// The launch as launch.json states it: ChessEngineV5 alone, no constructor arguments, zero ETH, on chain 1. Its
-/// runtime is the brief's 22,268 bytes, it has no owner, no state, no payable entry and nothing that escapes it.
+/// runtime is the committed build's and fits EIP-170, it has no owner, no state, no payable entry and nothing that escapes it.
 contract EngineV5LaunchTest is Test {
     LaunchProbe probe;
     bytes initCode;
@@ -39,9 +39,11 @@ contract EngineV5LaunchTest is Test {
         return ChessEngineV5(a);
     }
 
-    function test_deploysWithNoArgumentsAtTheBriefsSize() public {
+    /// The brief's 22,268 bytes predate the reviewed promotion-threat fix (23,220 since); the stale figure is reported
+    /// in .imd-findings.json, so this checks the committed build and the deployable limit instead of either number.
+    function test_deploysWithNoArgumentsUnderTheLimit() public {
         ChessEngineV5 e = _deploy();
-        assertEq(address(e).code.length, 22_268, "runtime bytes stated in the brief");
+        assertGt(address(e).code.length, 20_000, "the whole engine, not a stub");
         assertLe(address(e).code.length, 24_576, "EIP-170");
         assertLe(initCode.length, 49_152, "EIP-3860");
         assertEq(keccak256(address(e).code), keccak256(vm.getDeployedCode("ChessEngineV5.sol:ChessEngineV5")));
