@@ -88,7 +88,7 @@ contract EngineV5GamesTest is Chessboard {
     bytes32 fingerprint; // every move of every game: changes whenever play changes
 
     /// Update when play is meant to change (engine tuning); pure gas work must leave it as it is.
-    bytes32 constant GOLDEN = 0x1b39ce9cce3b76f118a6d5af187bd26205513b69f9861aeba2a0cf2902caa50c;
+    bytes32 constant GOLDEN = 0x981b82e1bf158d419277460ddb6e6a0d0752eff0e917358268d810c9f60e142a;
     uint256 behindAt40;
 
     struct G {
@@ -141,16 +141,33 @@ contract EngineV5GamesTest is Chessboard {
         emit log_named_uint("longest quiet stretch, average per game", longestQuiet / GAMES);
         emit log_named_uint("games with a quiet stretch of 30+", longQuietGames);
         emit log_named_bytes32("games fingerprint", fingerprint);
-        emit log_named_string("comebacks (behind 3+ pawns at half-move 40, then won)",
-            string.concat(vm.toString(comebacks), " of ", vm.toString(behindAt40)));
+        emit log_named_string(
+            "comebacks (behind 3+ pawns at half-move 40, then won)",
+            string.concat(vm.toString(comebacks), " of ", vm.toString(behindAt40))
+        );
         string[3] memory names = ["effort < 40%", "effort 40-70%", "effort 70%+"];
         for (uint256 t; t < 3; t++) {
             if (moves[t] == 0) continue;
-            emit log_named_string(names[t], string.concat(
-                vm.toString(moves[t]), " moves, gas avg ", vm.toString(gas[t] / moves[t]), " max ",
-                vm.toString(maxGas[t]), "; mates in one taken ", vm.toString(matesTaken[t]), "/",
-                vm.toString(mateChances[t]), "; walked into an avoidable mate ", vm.toString(walkedIntoMate[t]),
-                "; gave a piece ", vm.toString(gavePiece[t]), ", a rook or queen ", vm.toString(gaveRook[t])));
+            emit log_named_string(
+                names[t],
+                string.concat(
+                    vm.toString(moves[t]),
+                    " moves, gas avg ",
+                    vm.toString(gas[t] / moves[t]),
+                    " max ",
+                    vm.toString(maxGas[t]),
+                    "; mates in one taken ",
+                    vm.toString(matesTaken[t]),
+                    "/",
+                    vm.toString(mateChances[t]),
+                    "; walked into an avoidable mate ",
+                    vm.toString(walkedIntoMate[t]),
+                    "; gave a piece ",
+                    vm.toString(gavePiece[t]),
+                    ", a rook or queen ",
+                    vm.toString(gaveRook[t])
+                )
+            );
         }
         if (GOLDEN != bytes32(0)) assertEq(fingerprint, GOLDEN, "self-play games changed");
     }
@@ -167,7 +184,9 @@ contract EngineV5GamesTest is Chessboard {
             uint256 r = uint256(keccak256(abi.encode(game, g.ply)));
             uint256 acc = accuracy(r);
             uint64[8] memory previous;
-            for (uint256 i; i < 8; i++) previous[i] = g.ring[(g.ply + 14 - i * 2) % 16];
+            for (uint256 i; i < 8; i++) {
+                previous[i] = g.ring[(g.ply + 14 - i * 2) % 16];
+            }
             uint256 g0 = gasleft();
             (uint16 m,) = v5.choose(g.b, mover, other, black, acc, r >> 16, previous, uint32(game), g.quiet);
             uint256 used = g0 - gasleft();
@@ -207,7 +226,9 @@ contract EngineV5GamesTest is Chessboard {
             behindAt40++;
             if ((g.materialAt40 <= -300 && result == 1) || (g.materialAt40 >= 300 && result == 2)) comebacks++;
         }
-        if (game < 3) emit log_named_string(string.concat("game ", vm.toString(game), " result ", vm.toString(result)), "");
+        if (game < 3) {
+            emit log_named_string(string.concat("game ", vm.toString(game), " result ", vm.toString(result)), "");
+        }
     }
 
     /// A giveaway is a move whose immediate material result is clearly worse than the best available: by a minor
@@ -223,7 +244,26 @@ contract EngineV5GamesTest is Chessboard {
         if (best - chosen >= 300) gavePiece[tier]++;
         if (best - chosen >= 400 && -chosen >= 500) {
             gaveRook[tier]++;
-            if (tier > 0) emit log_named_string("gave rook/queen", string.concat(vm.toString(g.b), " ", vm.toString(g.w), " ", vm.toString(g.k), " ", black ? "b" : "w", " ", vm.toString(m), " net ", vm.toString(chosen), " best ", vm.toString(best)));
+            if (tier > 0) {
+                emit log_named_string(
+                    "gave rook/queen",
+                    string.concat(
+                        vm.toString(g.b),
+                        " ",
+                        vm.toString(g.w),
+                        " ",
+                        vm.toString(g.k),
+                        " ",
+                        black ? "b" : "w",
+                        " ",
+                        vm.toString(m),
+                        " net ",
+                        vm.toString(chosen),
+                        " best ",
+                        vm.toString(best)
+                    )
+                );
+            }
         }
     }
 

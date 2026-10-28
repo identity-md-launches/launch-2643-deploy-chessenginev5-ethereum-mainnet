@@ -21,13 +21,20 @@ import {Rules} from "./Rules.sol";
 /// Against a lone king it converts at full effort: it shrinks the king's escape squares towards the edge and brings
 /// its own king closer. The longer a quiet stretch lasts (no capture or pawn move), the more it leans towards
 /// progress: pawn moves, checks, pressure on the enemy king and trades that lose no material, trades mainly when
-/// ahead. Risk is still scored, so it never hangs a piece to break the stretch.
+/// ahead. Risk is still scored, so it never hangs a piece to break the stretch. An enemy pawn a step from queening
+/// is a risk every move is scored against, at every strength: a move that neither takes it, blocks it nor covers
+/// its promotion square loses a queen for a pawn.
+///
+/// The engine is pure: every chance above (which quiet moves it weighs, which checks it tests, its second looks and
+/// its mistake) is a function of `seed` alone, so the same seed always gives the same move. The caller must draw
+/// the seed from something the trader cannot choose or predict when committing the trade; otherwise a trader picks
+/// a seed at which a small trade plays the strong move, or at which the engine misses a mate.
 contract ChessEngineV5 is IChessEngine {
     int256 internal constant MATE = 100_000;
     uint256 internal constant MAX_MISTAKE = 400;
     uint256 internal constant REFINE = 4;
-    uint256 internal constant MATE_TESTS = 6; // checks tested for mate per choice: ours, as many again of ours that box
-    // the king in, and (per look) the enemy's
+    uint256 internal constant MATE_TESTS = 6; // checks tested for mate per choice: ours, and as many again of ours that
+    // box the king in (a second look tries every enemy check: a bound there saw a mate only from the low squares)
     uint256 internal constant MAX_ACCURACY = 9_000; // even a whale keeps a tenth of the mistake
     int256 internal constant CHECK_BONUS = 30;
     int256 internal constant PRESSURE = 20;
@@ -39,6 +46,9 @@ contract ChessEngineV5 is IChessEngine {
     uint64 internal constant FILE_A = 0x0101010101010101;
     uint64 internal constant NOT_A = 0xfefefefefefefefe; // every file but a
     uint64 internal constant NOT_H = 0x7f7f7f7f7f7f7f7f; // every file but h
+    uint64 internal constant RANK_2 = 0x000000000000ff00;
+    uint64 internal constant RANK_7 = 0x00ff000000000000;
+    int256 internal constant PROMOTION = 800; // what an enemy pawn's promotion wins: a queen for a pawn
 
     /// One side's attacks, grouped by the cheapest attacker.
     struct Maps {
@@ -87,11 +97,20 @@ contract ChessEngineV5 is IChessEngine {
         uint32 gameNo;
         uint256 push; // the push for progress, 0-10,000, from the quiet half-moves
         uint64[8] previous;
+        uint64 passers; // enemy pawns a step from promotion with the square ahead empty
     }
 
-    function play(uint256 board, uint32 mover, uint32 other, bool black, uint256 strengthBps, uint256 seed,
-        uint64[8] calldata previous, uint32 gameNo, uint16 quiet) external pure returns (uint16 m, Rules.Played memory)
-    {
+    function play(
+        uint256 board,
+        uint32 mover,
+        uint32 other,
+        bool black,
+        uint256 strengthBps,
+        uint256 seed,
+        uint64[8] calldata previous,
+        uint32 gameNo,
+        uint16 quiet
+    ) external pure returns (uint16 m, Rules.Played memory) {
         Ctx memory c = _context(board, black ? other : mover, black ? mover : other, !black, _aware(strengthBps, seed));
         (m,) = _choose(c, strengthBps, seed, previous, gameNo, quiet);
         return (m, Rules.playLegal(board, c.p, m, black));
@@ -111,9 +130,17 @@ contract ChessEngineV5 is IChessEngine {
     }
 
     /// The choice alone, with how many legal moves there were (for measurements and tools).
-    function choose(uint256 board, uint32 mover, uint32 other, bool black, uint256 strengthBps, uint256 seed,
-        uint64[8] calldata previous, uint32 gameNo, uint16 quiet) external pure returns (uint16, uint256)
-    {
+    function choose(
+        uint256 board,
+        uint32 mover,
+        uint32 other,
+        bool black,
+        uint256 strengthBps,
+        uint256 seed,
+        uint64[8] calldata previous,
+        uint32 gameNo,
+        uint16 quiet
+    ) external pure returns (uint16, uint256) {
         Ctx memory c = _context(board, black ? other : mover, black ? mover : other, !black, _aware(strengthBps, seed));
         return _choose(c, strengthBps, seed, previous, gameNo, quiet);
     }
@@ -144,8 +171,8 @@ contract ChessEngineV5 is IChessEngine {
         // a person weighs only so many quiet moves: about 8 at the weakest, about 17 at full strength
         uint256 cap = (8 + acc / 1_000) * 10_000 / count;
         if (cap < c.lookBps) c.lookBps = cap;
-        // in check, or with few moves, anyone looks at every move
-        if (count <= 10 || inCheck) c.lookBps = 10_000;
+        // in check, with few moves, or with an enemy pawn about to queen, anyone looks at every move
+        if (count <= 10 || inCheck || c.passers != 0) c.lookBps = 10_000;
         // the mistake never vanishes entirely, except when converting against a lone king
         uint256 slack = 10_000 - (acc > MAX_ACCURACY ? MAX_ACCURACY : acc);
         int256[] memory base = new int256[](count);
@@ -198,7 +225,10 @@ contract ChessEngineV5 is IChessEngine {
                 Bitboard.makeMoveInto(c.p, c.n, m, c.white);
                 if (_seen(c, c.n, m)) score -= 300;
             }
-            if (score > best) { best = score; chosen = m; }
+            if (score > best) {
+                best = score;
+                chosen = m;
+            }
         }
     }
 
@@ -265,6 +295,9 @@ contract ChessEngineV5 is IChessEngine {
             c.checks = Bitboard.checkInfo(p, white);
             if (c.conversion) return c;
             c.enemy = _maps(p, !white);
+            // enemy pawns a step from promotion with the square ahead empty: every move is scored against that threat
+            uint64 seventh = p.pc[1] & c.opp & (white ? RANK_2 : RANK_7);
+            c.passers = white ? seventh & (empty << 8) : seventh & (empty >> 8);
             // squares we attack, and those attacked from two groups (each pawn diagonal, knights, bishops, rooks,
             // queens, king): two pieces of one group on the same square count once, so a defence is never overrated
             uint64 pawns = p.pc[1] & c.own;
@@ -286,8 +319,15 @@ contract ChessEngineV5 is IChessEngine {
                 uint64 z = c.zone;
                 uint64 diagonal = Bitboard.bishopAttacks(z, empty);
                 uint64 straight = Bitboard.rookAttacks(z, empty);
-                c.zoneFrom = [uint64(0), Bitboard.pawnAttacks(z, !white), diagonal, Bitboard.knightAttacks(z), straight,
-                    diagonal | straight, Bitboard.kingAttacks(z)];
+                c.zoneFrom = [
+                    uint64(0),
+                    Bitboard.pawnAttacks(z, !white),
+                    diagonal,
+                    Bitboard.knightAttacks(z),
+                    straight,
+                    diagonal | straight,
+                    Bitboard.kingAttacks(z)
+                ];
             }
             // our pieces already in danger before the move (if this player notices)
             c.otherThreats = aware;
@@ -322,8 +362,10 @@ contract ChessEngineV5 is IChessEngine {
             bool check = Bitboard.givesCheckAs(p, c.checks, c.n, m, c.white, t);
             // captures, checks, promotions and moves of our most endangered piece always catch the eye (and pawn moves
             // once a quiet stretch drags on); other moves only sometimes
-            if (!check && victim == 0 && !ep && !promo && !(t == 1 && c.push != 0) && !(from == c.sqA && c.lossA != 0)
-                && _mix(c.seedHash, m ^ 0x10000) % 10_000 >= c.lookBps) {
+            if (
+                !check && victim == 0 && !ep && !promo && !(t == 1 && c.push != 0) && !(from == c.sqA && c.lossA != 0)
+                    && _mix(c.seedHash, m ^ 0x10000) % 10_000 >= c.lookBps
+            ) {
                 return (0, 0, 0, false, false);
             }
             looked = true;
@@ -396,6 +438,48 @@ contract ChessEngineV5 is IChessEngine {
                 int256 other = from == c.sqA ? c.lossB : c.lossA;
                 if (other > threat) threat = other;
             }
+            if (c.passers != 0) {
+                // an enemy pawn about to queen: scored on the position after the move (c.n is scratch here)
+                Bitboard.makeMoveInto(c.p, c.n, (uint16(from) << 6) | to, c.white);
+                int256 queen = _promotion(c, c.n);
+                if (queen > threat) threat = queen;
+            }
+        }
+    }
+
+    /// What the enemy's pawns a step from promotion (c.passers) win on `p`, the position after our move: a queen
+    /// for a pawn (PROMOTION) unless the move took the pawn, blocked it, or left us attacking the promotion square,
+    /// where the new queen goes for nothing when the square is undefended, else for our cheapest attacker (a king
+    /// takes nothing defended). Lines are read with the pawn gone from its square, so a rook behind it counts for
+    /// either side.
+    function _promotion(Ctx memory c, Bitboard.Pos memory p) internal pure returns (int256 loss) {
+        unchecked {
+            uint64 own = c.white ? p.white : p.black;
+            uint64 opp = c.white ? p.black : p.white;
+            uint64 pawns = c.passers & p.pc[1] & opp;
+            while (pawns != 0) {
+                uint64 pb = uint64(1) << Bitboard.lsb(pawns);
+                pawns &= pawns - 1;
+                uint64 qb = c.white ? pb >> 8 : pb << 8;
+                if ((own | opp) & qb != 0) continue; // blocked
+                // the squares from which each kind of piece attacks the promotion square
+                uint64 straight = Bitboard.rookAttacks(qb, ~(own | opp) | pb);
+                uint64 diagonal = Bitboard.bishopAttacks(qb, ~(own | opp) | pb);
+                uint64 jumps = Bitboard.knightAttacks(qb);
+                uint64 steps = Bitboard.kingAttacks(qb);
+                bool defended = Bitboard.pawnAttacks(p.pc[1] & opp, !c.white) & qb != 0
+                    || ((jumps & p.pc[3])
+                                | (diagonal & (p.pc[2] | p.pc[5]))
+                                | (straight & (p.pc[4] | p.pc[5]))
+                                | (steps & p.pc[6])) & opp != 0;
+                int256 a; // our cheapest attacker: 300, 500, 900, or 1 for the king alone
+                if (((jumps & p.pc[3]) | (diagonal & p.pc[2])) & own != 0) a = 300;
+                else if (straight & p.pc[4] & own != 0) a = 500;
+                else if ((straight | diagonal) & p.pc[5] & own != 0) a = 900;
+                else if (steps & p.pc[6] & own != 0) a = 1;
+                int256 l = a == 0 || (defended && a == 1) ? PROMOTION : !defended ? int256(0) : a - 100;
+                if (l > loss) loss = l;
+            }
         }
     }
 
@@ -406,8 +490,9 @@ contract ChessEngineV5 is IChessEngine {
             uint64 king = uint64(1) << c.enemyKing; // lifted off the board: it can't step back along the line
             uint64 empty = (~(c.p.white | c.p.black) | (uint64(1) << from) | king) & ~(uint64(1) << to);
             uint64 b = uint64(1) << to;
-            uint64 a = t == 1 ? Bitboard.pawnAttacks(b, c.white) : t == 3 ? Bitboard.knightAttacks(b) : t == 6
-                ? Bitboard.kingAttacks(b) : 0;
+            uint64 a = t == 1
+                ? Bitboard.pawnAttacks(b, c.white)
+                : t == 3 ? Bitboard.knightAttacks(b) : t == 6 ? Bitboard.kingAttacks(b) : 0;
             if (t == 4 || t == 5) a = Bitboard.rookAttacks(b, empty);
             if (t == 2 || t == 5) a |= Bitboard.bishopAttacks(b, empty);
             return Bitboard.kingAttacks(king) & ~c.opp & ~(c.our1 | a);
@@ -473,11 +558,13 @@ contract ChessEngineV5 is IChessEngine {
             // (where nearly every mate in one happens), and at club strength not always
             uint64 home = c.white ? n.white : n.black;
             uint64 flights = Bitboard.kingAttacks(n.pc[6] & home) & ~home & ~e.all;
-            if (flights & (flights - 1) == 0 && _mix(c.seedHash, m ^ 0x30000) % 10_000 < c.guardBps
-                && Bitboard.mateInOne(n, !c.white, MATE_TESTS) != 0) {
+            if (
+                flights & (flights - 1) == 0 && _mix(c.seedHash, m ^ 0x30000) % 10_000 < c.guardBps
+                    && Bitboard.mateInOne(n, !c.white) != 0
+            ) {
                 return -MATE;
             }
-            int256 threat;
+            int256 threat = c.passers != 0 ? _promotion(c, n) : int256(0);
             uint64 hit = (c.white ? n.white : n.black) & ~n.pc[6] & e.all;
             uint64 defended = hit == 0 ? 0 : Bitboard.attacksBy(n, c.white); // only asked about pieces in `hit`
             while (hit != 0) {
@@ -511,7 +598,9 @@ contract ChessEngineV5 is IChessEngine {
 
     /// Whether the position `n` after our move `m` is one of this side's recent positions.
     function _seen(Ctx memory c, Bitboard.Pos memory n, uint16 m) internal pure returns (bool) {
-        uint64 key = Chess.positionKey(Bitboard.boardAfter(c.board, c.p, m, c.white), n.whiteState, n.blackState, c.white, c.gameNo);
+        uint64 key = Chess.positionKey(
+            Bitboard.boardAfter(c.board, c.p, m, c.white), n.whiteState, n.blackState, c.white, c.gameNo
+        );
         for (uint256 j; j < 8; j++) {
             if (c.previous[j] == key) return true;
         }
@@ -609,9 +698,11 @@ contract ChessEngineV5 is IChessEngine {
         uint256 ownFile = ownKing & 7;
         uint256 orank = ownKing >> 3;
         // Distance from the defender's nearest edge, rather than from any edge of the board.
-        uint256 ourEdge = kr == 0 ? orank : kr == 7 ? 7 - orank : kf == 0 ? ownFile : kf == 7 ? 7 - ownFile
-            : (EDGE >> (uint256(ownKing) << 1)) & 3;
-        return (worst - _steps(ownKing, king) * 2 * 40 + int256(ourEdge > 2 ? 2 : ourEdge) * 80 + (8 - replies) * 3, false);
+        uint256 ourEdge = kr == 0
+            ? orank
+            : kr == 7 ? 7 - orank : kf == 0 ? ownFile : kf == 7 ? 7 - ownFile : (EDGE >> (uint256(ownKing) << 1)) & 3;
+        return
+            (worst - _steps(ownKing, king) * 2 * 40 + int256(ourEdge > 2 ? 2 : ourEdge) * 80 + (8 - replies) * 3, false);
     }
 
     /// King steps between two squares.
@@ -640,8 +731,11 @@ contract ChessEngineV5 is IChessEngine {
         unchecked {
             if (e.all & bit == 0) return 0;
             if (!defended) return v;
-            int256 a = e.pawn & bit != 0 ? int256(100) : e.minor & bit != 0 ? int256(300) : e.rook & bit != 0
-                ? int256(500) : e.queen & bit != 0 ? int256(900) : int256(-1);
+            int256 a = e.pawn & bit != 0
+                ? int256(100)
+                : e.minor & bit != 0
+                    ? int256(300)
+                    : e.rook & bit != 0 ? int256(500) : e.queen & bit != 0 ? int256(900) : int256(-1);
             if (a < 0) return 0;
             return v > a ? v - a : int256(0);
         }
