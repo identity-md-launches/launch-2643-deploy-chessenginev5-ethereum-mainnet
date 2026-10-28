@@ -13,7 +13,7 @@ import {BB} from "./Bitboard.t.sol";
 /// move out.
 contract RulesRandomTest is Chessboard {
     BB bb = BB(vm.deployCode("Bitboard.t.sol:BB"));
-    string data;
+    uint256[][] recordedMoves;
     uint256[] games;
     uint256[] plies;
     uint256[] hashes;
@@ -23,7 +23,9 @@ contract RulesRandomTest is Chessboard {
     uint256[] rights;
 
     function setUp() public {
-        data = vm.readFile("./test/data/random.json");
+        string memory data = vm.readFile("./test/data/random.json");
+        // Avoid copying the full JSON from storage and reparsing it at every game boundary.
+        recordedMoves = abi.decode(vm.parseJson(data, ".games"), (uint256[][]));
         games = vm.parseJsonUintArray(data, ".game");
         plies = vm.parseJsonUintArray(data, ".ply");
         hashes = vm.parseJsonUintArray(data, ".hash");
@@ -31,9 +33,32 @@ contract RulesRandomTest is Chessboard {
         checks = vm.parseJsonUintArray(data, ".check");
         statuses = vm.parseJsonUintArray(data, ".status");
         rights = vm.parseJsonUintArray(data, ".rights");
+        assertEq(recordedMoves.length, 250, "complete game corpus");
+        assertEq(games.length, 29_828, "complete position corpus");
     }
 
-    function test_randomGamesAgainstChessJs() public {
+    // Independent game ranges let Forge run the full corpus in parallel and bound each call's memory growth.
+    function test_randomGamesAgainstChessJs_000_049() public {
+        _randomGamesAgainstChessJs(0, 50);
+    }
+
+    function test_randomGamesAgainstChessJs_050_099() public {
+        _randomGamesAgainstChessJs(50, 100);
+    }
+
+    function test_randomGamesAgainstChessJs_100_149() public {
+        _randomGamesAgainstChessJs(100, 150);
+    }
+
+    function test_randomGamesAgainstChessJs_150_199() public {
+        _randomGamesAgainstChessJs(150, 200);
+    }
+
+    function test_randomGamesAgainstChessJs_200_249() public {
+        _randomGamesAgainstChessJs(200, 250);
+    }
+
+    function _randomGamesAgainstChessJs(uint256 firstGame, uint256 endGame) internal {
         uint256 last = type(uint256).max;
         uint256[] memory moves;
         uint256 b;
@@ -42,9 +67,11 @@ contract RulesRandomTest is Chessboard {
         uint256[6] memory wrong; // move list, count, check, status, fast check / mate, castling rights
         uint256 compared;
         for (uint256 p; p < games.length; p++) {
+            if (games[p] < firstGame) continue;
+            if (games[p] >= endGame) break;
             if (games[p] != last) {
                 last = games[p];
-                moves = vm.parseJsonUintArray(data, string.concat(".games[", vm.toString(last), "]"));
+                moves = recordedMoves[last];
                 (b, w, k) = (Chess.START_BOARD, Chess.START_WHITE, Chess.START_BLACK);
             }
             uint256 ply = plies[p];
@@ -70,6 +97,11 @@ contract RulesRandomTest is Chessboard {
             if (ply < moves.length) (b, w, k,) = step(b, w, k, !white, uint16(moves[ply])); // reverts if illegal
         }
         emit log_named_uint("positions compared", compared);
+        uint256 expected;
+        for (uint256 g = firstGame; g < endGame; g++) {
+            expected += recordedMoves[g].length + 1;
+        }
+        assertEq(compared, expected, "all positions including each game's final state");
         assertEq(wrong[0], 0, "legal move lists");
         assertEq(wrong[1], 0, "move counts");
         assertEq(wrong[2], 0, "in check");
