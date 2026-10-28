@@ -19,7 +19,8 @@ contract RulesHarness {
 /// Board helpers shared by every test: squares by name, positions, replays of the recorded games, mirrored colours.
 /// Encoding in src/Chess.sol (a1 = square 0; 1 pawn 2 bishop 3 knight 4 rook 5 queen 6 king, +8 black).
 abstract contract Chessboard is Test {
-    RulesHarness rules = new RulesHarness();
+    // Load separately built helpers: embedding their creation code in each suite makes clean IR builds costly.
+    RulesHarness rules = RulesHarness(vm.deployCode("Chessboard.sol:RulesHarness"));
 
     function sq(string memory s) internal pure returns (uint16) {
         bytes memory b = bytes(s);

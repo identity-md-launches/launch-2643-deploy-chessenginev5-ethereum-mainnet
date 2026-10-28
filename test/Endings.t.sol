@@ -26,7 +26,7 @@ contract BBStatus {
 /// rules must report the same ending for the final move.
 contract EndingsTest is Chessboard {
     function test_statusAgainstChessJs() public {
-        BBStatus bb = new BBStatus();
+        BBStatus bb = BBStatus(vm.deployCode("Endings.t.sol:BBStatus"));
         string memory data = vm.readFile("./test/data/endings.json");
         uint256[] memory ends = vm.parseJsonUintArray(data, ".end");
         uint256[4] memory wrong; // bitboard: count, check, status; the hook's rules: final status

@@ -12,7 +12,7 @@ import {BB} from "./Bitboard.t.sol";
 /// every 4th position the fast check flags and on every 8th the fast mate-in-one search are compared with playing each
 /// move out.
 contract RulesRandomTest is Chessboard {
-    BB bb = new BB();
+    BB bb = BB(vm.deployCode("Bitboard.t.sol:BB"));
     string data;
     uint256[] games;
     uint256[] plies;

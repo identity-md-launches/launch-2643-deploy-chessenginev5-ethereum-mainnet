@@ -39,7 +39,7 @@ contract BBGas {
 
 contract BitboardGasTest is Chessboard {
     function test_costs() public {
-        BBGas g = new BBGas();
+        BBGas g = BBGas(vm.deployCode("BitboardGas.t.sol:BBGas"));
         uint256[4] memory t;
         uint256 n;
         for (uint256 game; game < 4; game++) {

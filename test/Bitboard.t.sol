@@ -51,7 +51,7 @@ contract BB {
 /// games, and its fast check and mate-in-one tests against playing every move out. (Boards and side states after
 /// every legal move were cross-checked against the ChessFish verifier.)
 contract BitboardTest is Chessboard {
-    BB bb = new BB();
+    BB bb = BB(vm.deployCode("Bitboard.t.sol:BB"));
     string data;
     uint256[] games;
     uint256[] plies;
@@ -136,7 +136,7 @@ contract BitboardTest is Chessboard {
 /// A rook taken on its home square takes its castling right with it: another rook later standing there doesn't give
 /// it back (lines from chess.js, where the castle is illegal at the end; self-audit 2026-10-22).
 contract CastlingRightsTest is Chessboard {
-    BB bb = new BB();
+    BB bb = BB(vm.deployCode("Bitboard.t.sol:BB"));
 
     function castles(uint16[17] memory line, uint256 plies, uint16 castle) internal returns (bool found) {
         (uint256 b, uint32 w, uint32 k) = (Chess.START_BOARD, Chess.START_WHITE, Chess.START_BLACK);

@@ -14,8 +14,8 @@ contract MateFinder {
 }
 
 contract EngineV5Test is Chessboard {
-    ChessEngineV5 v5 = new ChessEngineV5();
-    MateFinder finder = new MateFinder();
+    ChessEngineV5 v5 = ChessEngineV5(vm.deployCode("ChessEngineV5.sol:ChessEngineV5"));
+    MateFinder finder = MateFinder(vm.deployCode("EngineV5.t.sol:MateFinder"));
 
     /// Every choice on positions from the test games is a legal move and play() applies it as the rules do; mate in one is always taken; gas per choice.
     function test_legalChoicesMatesAndGas() public {

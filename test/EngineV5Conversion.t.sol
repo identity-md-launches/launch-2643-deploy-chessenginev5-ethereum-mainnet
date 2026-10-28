@@ -10,7 +10,7 @@ import {ChessEngineV5} from "../src/ChessEngineV5.sol";
 /// mirrors), the defending king at full effort. Mate within 60 half-moves, no stalemate, no hung piece. v5 is deployed
 /// from its own build (200 optimizer runs, foundry.toml).
 contract EngineV5ConversionTest is Chessboard {
-    ChessEngineV5 v5 = new ChessEngineV5();
+    ChessEngineV5 v5 = ChessEngineV5(vm.deployCode("ChessEngineV5.sol:ChessEngineV5"));
     uint256 choices;
     uint256 gasTotal;
     uint256 gasMax;

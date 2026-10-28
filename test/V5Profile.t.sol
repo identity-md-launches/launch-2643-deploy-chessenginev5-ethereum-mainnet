@@ -62,7 +62,7 @@ contract V5Probe is ChessEngineV5 {
 
 contract V5ProfileTest is Chessboard {
     function test_stages() public {
-        V5Probe v = new V5Probe();
+        V5Probe v = V5Probe(vm.deployCode("V5Profile.t.sol:V5Probe"));
         uint64[8] memory none;
         uint256[11] memory t;
         uint256 n;

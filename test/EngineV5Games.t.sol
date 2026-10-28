@@ -63,8 +63,8 @@ contract Judge is ChessEngineV5 {
 /// Reports how games end, their length, checks and captures, gas per choice by effort, and mistakes by effort
 ///.
 contract EngineV5GamesTest is Chessboard {
-    ChessEngineV5 v5 = new ChessEngineV5();
-    Judge judge = new Judge();
+    ChessEngineV5 v5 = ChessEngineV5(vm.deployCode("ChessEngineV5.sol:ChessEngineV5"));
+    Judge judge = Judge(vm.deployCode("EngineV5Games.t.sol:Judge"));
 
     uint256 constant GAMES = 40;
 
