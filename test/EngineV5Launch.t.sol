@@ -39,7 +39,7 @@ contract EngineV5LaunchTest is Test {
         return ChessEngineV5(a);
     }
 
-    /// The brief's 22,268 bytes predate the reviewed promotion-threat fix (23,220 since); the stale figure is reported
+    /// The brief's 22,268 bytes predate the reviewed promotion-threat fixes (23,339 since); the stale figure is reported
     /// in .imd-findings.json, so this checks the committed build and the deployable limit instead of either number.
     function test_deploysWithNoArgumentsUnderTheLimit() public {
         ChessEngineV5 e = _deploy();
